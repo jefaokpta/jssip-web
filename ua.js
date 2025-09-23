@@ -4,6 +4,7 @@
   Edite as configurações abaixo para o seu servidor/conta SIP.
   Somente ligações de saída neste MVP.
 */
+
 (function (window) {
   'use strict';
 
@@ -11,13 +12,13 @@
   // Exemplo de servidor WebSocket SIP (WSS) e credenciais da conta SIP
   const SIP_CONFIG = {
     // URL do WebSocket SIP (WSS). Ex.: 'wss://sip.seudominio.com:7443'
-    wsServers: 'wss://SEU_SERVIDOR_SIP_WSS_AQUI',
+    wsServers: `wss://${credentials.domain}:${credentials.port}/ws`,
 
     // URI do usuário SIP. Ex.: 'sip:usuario@seudominio.com'
-    uri: 'sip:USUARIO@SEU_DOMINIO_SIP',
+    uri: `sip:${credentials.username}@${credentials.domain}`,
 
     // Senha do usuário SIP
-    password: 'SUA_SENHA_AQUI',
+    password: credentials.password,
 
     // Nome de exibição (opcional)
     display_name: 'Web Phone',
