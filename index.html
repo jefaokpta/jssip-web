@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Web Phone (JsSIP)</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, sans-serif; margin: 0; padding: 16px; }
+    .phone {
+      max-width: 520px; margin: 0 auto; border: 1px solid #ccc; border-radius: 12px; padding: 16px;
+      box-shadow: 0 6px 20px rgba(0,0,0,.08);
+      background: #fff; color: #111;
+    }
+    @media (prefers-color-scheme: dark) {
+      .phone { background: #111; color: #eee; border-color: #333; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
+      input, button { background: #1a1a1a; color: #fff; border-color: #333; }
+    }
+    h1 { font-size: 20px; margin: 0 0 12px; }
+    .row { display: flex; gap: 8px; margin: 10px 0; align-items: center; }
+    input[type="text"] { flex: 1; padding: 10px 12px; border-radius: 10px; border: 1px solid #ccc; font-size: 16px; }
+    button { padding: 10px 14px; border-radius: 10px; border: 1px solid #bbb; cursor: pointer; font-size: 15px; }
+    button.primary { background: #0a7; color: #fff; border-color: #0a7; }
+    button.danger { background: #d33; color: #fff; border-color: #d33; }
+    .status { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; white-space: pre-line; min-height: 2em; opacity: .9; }
+    .hint { font-size: 12px; opacity: .8; }
+    .muted { opacity: .7; }
+    .footer { margin-top: 14px; font-size: 12px; opacity: .7; }
+  </style>
+</head>
+<body>
+  <div class="phone">
+    <h1>Web Phone</h1>
+    <div class="hint">Configure o telefone editando o arquivo <b>ua.js</b> (wsServers, uri, password). Apenas ligações de saída.</div>
+
+    <div class="row">
+      <input id="dest" type="text" placeholder="Destino (ex.: 1001 ou sip:1001@seudominio.com)">
+    </div>
+
+    <div class="row">
+      <button id="btnCall" class="primary">Ligar</button>
+      <button id="btnHangup" class="danger" disabled>Desligar</button>
+    </div>
+
+    <div id="status" class="status"></div>
+
+    <!-- Áudio remoto: fica oculto, mas pode habilitar controles -->
+    <audio id="remoteAudio" autoplay playsinline></audio>
+
+    <div class="footer">Powered by <a href="https://jssip.net/" target="_blank" rel="noreferrer">JsSIP</a></div>
+  </div>
+
+  <!-- Bibliotecas -->
+  <script src="lib/jssip.min.js"></script>
+  <script src="ua.js"></script>
+  <script>
+    // Lógica do Web Phone (somente chamadas de saída)
+    (function () {
+      const statusEl = document.getElementById('status');
+      const destEl = document.getElementById('dest');
+      const btnCall = document.getElementById('btnCall');
+      const btnHangup = document.getElementById('btnHangup');
+      const remoteAudio = document.getElementById('remoteAudio');
+
+      let ua;           // JsSIP.UA
+      let session = null; // JsSIP.RTCSession atual
+
+      function log(msg) {
+        console.log('[PHONE]', msg);
+        statusEl.textContent = String(msg);
+      }
+
+      // Inicializa UA
+      try {
+        ua = window.createUA();
+      } catch (e) {
+        log('Erro ao criar UA: ' + e.message + '\nEdite as configurações em ua.js.');
+        return;
+      }
+
+      // Eventos do UA
+      ua.on('connected', () => log('Socket conectado (WSS).'));
+      ua.on('disconnected', () => log('Socket desconectado.'));
+      ua.on('registered', () => log('Registrado no servidor SIP.'));
+      ua.on('unregistered', () => log('Não registrado.'));
+      ua.on('registrationFailed', (e) => log('Falha no registro: ' + (e.cause || 'desconhecida')));
+
+      // Apenas para depuração simples:
+      ua.on('newRTCSession', (data) => {
+        if (data.originator === 'remote') {
+          log('Chamada recebida (ignorada neste MVP).');
+        }
+      });
+
+      ua.start();
+
+      // Helpers
+      function getDomainFromUri(uri) {
+        const m = String(uri).match(/^sip:[^@]+@(.+)$/);
+        return m ? m[1] : '';
+      }
+
+      function buildTargetUri(input) {
+        const raw = String(input || '').trim();
+        if (raw.startsWith('sip:')) return raw;
+        const domain = getDomainFromUri((window.SIP_CONFIG || {}).uri || '');
+        if (!domain) return raw; // melhor do que bloquear — servidor pode aceitar número curto
+        return 'sip:' + raw + '@' + domain;
+      }
+
+      function setInCallUI(inCall) {
+        btnCall.disabled = inCall;
+        btnHangup.disabled = !inCall;
+        destEl.disabled = inCall;
+      }
+
+      // Discagem
+      btnCall.addEventListener('click', async () => {
+        const target = buildTargetUri(destEl.value);
+        if (!target) {
+          log('Informe um destino válido.');
+          return;
+        }
+
+        try {
+          const options = {
+            mediaConstraints: { audio: true, video: false },
+            pcConfig: { iceServers: [] },
+            rtcOfferConstraints: { offerToReceiveAudio: 1, offerToReceiveVideo: 0 }
+          };
+
+          session = ua.call(target, options);
+          setInCallUI(true);
+          log('Chamando ' + target + ' ...');
+
+          // Eventos da sessão
+          session.on('progress', () => log('Chamando (tocando)...'));
+          session.on('failed', (e) => {
+            log('Falha na chamada: ' + (e.cause || 'desconhecida'));
+            setInCallUI(false);
+            session = null;
+          });
+          session.on('ended', (e) => {
+            log('Chamada encerrada' + (e && e.cause ? ': ' + e.cause : '.'));
+            setInCallUI(false);
+            session = null;
+          });
+          session.on('confirmed', () => {
+            log('Em chamada.');
+          });
+
+          // Configurar áudio remoto quando o PeerConnection estiver pronto
+          session.on('peerconnection', (e) => {
+            const pc = e.peerconnection;
+            // Novas APIs usam 'track'
+            pc.addEventListener('track', (ev) => {
+              if (ev.streams && ev.streams[0]) {
+                remoteAudio.srcObject = ev.streams[0];
+              }
+            });
+            // Compat: alguns ambientes ainda disparam 'addstream'
+            pc.addEventListener('addstream', (ev) => {
+              remoteAudio.srcObject = ev.stream;
+            });
+          });
+        } catch (err) {
+          console.error(err);
+          log('Erro ao iniciar chamada: ' + err.message);
+          setInCallUI(false);
+          session = null;
+        }
+      });
+
+      // Desligar
+      btnHangup.addEventListener('click', () => {
+        if (session) {
+          try {
+            session.terminate();
+          } catch (_) {}
+        }
+      });
+
+      // Tooltip inicial
+      log('Pronto. Configure ua.js e clique em Ligar.');
+    })();
+  </script>
+</body>
+</html>
