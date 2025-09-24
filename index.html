@@ -1,166 +1,163 @@
 <!doctype html>
 <html lang="pt-br">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Web Phone (JsSIP)</title>
-  <link rel="stylesheet" href="styles.css">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Web Phone (JsSIP)</title>
+    <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div class="phone">
+<div class="phone">
     <h1>Web Phone</h1>
-    <div class="hint">Configure o telefone editando o arquivo <b>ua.js</b> (wsServers, uri, password). Apenas ligações de saída.</div>
-
-    <div class="row">
-      <input id="dest" type="text" placeholder="Destino (ex.: 1001 ou sip:1001@seudominio.com)">
+    <div class="hint">Configure o telefone editando o arquivo <b>ua.js</b> (wsServers, uri, password). Apenas ligações
+        de saída.
     </div>
 
     <div class="row">
-      <button id="btnCall" class="primary">Ligar</button>
-      <button id="btnHangup" class="danger" disabled>Desligar</button>
+        <input id="dest" type="text" placeholder="Destino (ex.: 1001 ou sip:1001@seudominio.com)">
+    </div>
+
+    <div class="row">
+        <button id="btnCall" class="primary">Ligar</button>
+        <button id="btnHangup" class="danger" disabled>Desligar</button>
     </div>
 
     <div id="status" class="status"></div>
 
-    <!-- Áudio remoto: fica oculto, mas pode habilitar controles -->
-    <audio id="remoteAudio" autoplay playsinline></audio>
+</div>
 
-  </div>
-
-  <!-- Bibliotecas -->
-  <script src="lib/jssip.min.js"></script>
-  <script src="credentials.js"></script>
-  <script src="ua.js"></script>
-  <script>
+<!-- Bibliotecas -->
+<script src="lib/jssip.min.js"></script>
+<script src="credentials.js"></script>
+<script src="ua.js"></script>
+<script src="utils.js"></script>
+<script>
     // Lógica do Web Phone (somente chamadas de saída)
     (function () {
-      const statusEl = document.getElementById('status');
-      const destEl = document.getElementById('dest');
-      const btnCall = document.getElementById('btnCall');
-      const btnHangup = document.getElementById('btnHangup');
-      const remoteAudio = document.getElementById('remoteAudio');
+        const statusEl = document.getElementById('status');
+        const destEl = document.getElementById('dest');
+        const btnCall = document.getElementById('btnCall');
+        const btnHangup = document.getElementById('btnHangup');
 
-      let ua;           // JsSIP.UA
-      let session = null; // JsSIP.RTCSession atual
+        let ua;           // JsSIP.UA
+        let session = null; // JsSIP.RTCSession atual
 
-      function log(msg) {
-        console.log('[PHONE]', msg);
-        statusEl.textContent = String(msg);
-      }
-
-      // Inicializa UA
-      try {
-        ua = window.createUA();
-      } catch (e) {
-        log('Erro ao criar UA: ' + e.message + '\nEdite as configurações em ua.js.');
-        return;
-      }
-
-      // Eventos do UA
-      ua.on('connected', () => log('Socket conectado (WSS).'));
-      ua.on('disconnected', () => log('Socket desconectado.'));
-      ua.on('registered', () => log('Registrado no servidor SIP.'));
-      ua.on('unregistered', () => log('Não registrado.'));
-      ua.on('registrationFailed', (e) => log('Falha no registro: ' + (e.cause || 'desconhecida')));
-
-      // Apenas para depuração simples:
-      ua.on('newRTCSession', (data) => {
-        if (data.originator === 'remote') {
-          log('Chamada recebida (ignorada neste MVP).');
-        }
-      });
-
-      ua.start();
-
-      // Helpers
-      function getDomainFromUri(uri) {
-        const m = String(uri).match(/^sip:[^@]+@(.+)$/);
-        return m ? m[1] : '';
-      }
-
-      function buildTargetUri(input) {
-        const raw = String(input || '').trim();
-        if (raw.startsWith('sip:')) return raw;
-        const domain = getDomainFromUri((window.SIP_CONFIG || {}).uri || '');
-        if (!domain) return raw; // melhor do que bloquear — servidor pode aceitar número curto
-        return 'sip:' + raw + '@' + domain;
-      }
-
-      function setInCallUI(inCall) {
-        btnCall.disabled = inCall;
-        btnHangup.disabled = !inCall;
-        destEl.disabled = inCall;
-      }
-
-      // Discagem
-      btnCall.addEventListener('click', async () => {
-        const target = buildTargetUri(destEl.value);
-        if (!target) {
-          log('Informe um destino válido.');
-          return;
+        function log(msg) {
+            console.log('[PHONE]', msg);
+            statusEl.textContent = String(msg);
         }
 
+        // Inicializa UA
         try {
-          const options = {
-            mediaConstraints: { audio: true, video: false },
-            pcConfig: { iceServers: [] },
-            rtcOfferConstraints: { offerToReceiveAudio: 1, offerToReceiveVideo: 0 }
-          };
-
-          session = ua.call(target, options);
-          setInCallUI(true);
-          log('Chamando ' + target + ' ...');
-
-          // Eventos da sessão
-          session.on('progress', () => log('Chamando (tocando)...'));
-          session.on('failed', (e) => {
-            log('Falha na chamada: ' + (e.cause || 'desconhecida'));
-            setInCallUI(false);
-            session = null;
-          });
-          session.on('ended', (e) => {
-            log('Chamada encerrada' + (e && e.cause ? ': ' + e.cause : '.'));
-            setInCallUI(false);
-            session = null;
-          });
-          session.on('confirmed', () => {
-            log('Em chamada.');
-          });
-
-          // Configurar áudio remoto quando o PeerConnection estiver pronto
-          session.on('peerconnection', (e) => {
-            const pc = e.peerconnection;
-            // Novas APIs usam 'track'
-            pc.addEventListener('track', (ev) => {
-              if (ev.streams && ev.streams[0]) {
-                remoteAudio.srcObject = ev.streams[0];
-              }
-            });
-            // Compat: alguns ambientes ainda disparam 'addstream'
-            pc.addEventListener('addstream', (ev) => {
-              remoteAudio.srcObject = ev.stream;
-            });
-          });
-        } catch (err) {
-          console.error(err);
-          log('Erro ao iniciar chamada: ' + err.message);
-          setInCallUI(false);
-          session = null;
+            ua = window.createUA();
+        } catch (e) {
+            log('Erro ao criar UA: ' + e.message + '\nEdite as configurações em ua.js.');
+            return;
         }
-      });
 
-      // Desligar
-      btnHangup.addEventListener('click', () => {
-        if (session) {
-          try {
-            session.terminate();
-          } catch (_) {}
+        // Eventos do UA
+        ua.on('connected', () => log('Socket conectado (WSS).'));
+        ua.on('disconnected', () => log('Socket desconectado.'));
+        ua.on('registered', () => log('Registrado no servidor SIP.'));
+        ua.on('unregistered', () => log('Não registrado.'));
+        ua.on('registrationFailed', (e) => log('Falha no registro: ' + (e.cause || 'desconhecida')));
+
+        // Apenas para depuração simples:
+        ua.on('newRTCSession', (ev) => {
+            console.log('[PHONE] Nova Sessao ', ev.originator)
+            if (ev.originator === 'remote') {
+                log('Chamada recebida (ignorada neste MVP).');
+            } else {
+                attachAudioToSession(ev.session)
+            }
+        });
+
+        ua.start();
+
+        // Helpers
+        function getDomainFromUri(uri) {
+            const m = String(uri).match(/^sip:[^@]+@(.+)$/);
+            return m ? m[1] : '';
         }
-      });
 
-      // Tooltip inicial
-      log('Pronto. Configure ua.js e clique em Ligar.');
+        function buildTargetUri(input) {
+            const raw = String(input || '').trim();
+            if (raw.startsWith('sip:')) return raw;
+            const domain = getDomainFromUri((window.SIP_CONFIG || {}).uri || '');
+            if (!domain) return raw; // melhor do que bloquear — servidor pode aceitar número curto
+            return 'sip:' + raw + '@' + domain;
+        }
+
+        function setInCallUI(inCall) {
+            btnCall.disabled = inCall;
+            btnHangup.disabled = !inCall;
+            destEl.disabled = inCall;
+        }
+
+        // Discagem
+        btnCall.addEventListener('click', async () => {
+            const target = buildTargetUri(destEl.value);
+            if (!target) {
+                log('Informe um destino válido.');
+                return;
+            }
+            const callToken = await getCallToken(credentials.token);
+            log('calltoken: ' + callToken);
+            try {
+                const options = {
+                    mediaConstraints: {audio: true, video: false},
+                    extraHeaders: ['X-CALL-TOKEN: ' + callToken]
+                };
+
+                session = ua.call(target, options);
+                setInCallUI(true);
+                log('Chamando ' + target + ' ...');
+
+                // Eventos da sessão
+                session.on('progress', () => log('Chamando (tocando)...'));
+                session.on('failed', (e) => {
+                    log('Falha na chamada: ' + (e.cause || 'desconhecida'));
+                    setInCallUI(false);
+                    session = null;
+                });
+                session.on('ended', (e) => {
+                    log('Chamada encerrada' + (e && e.cause ? ': ' + e.cause : '.'));
+                    setInCallUI(false);
+                    session = null;
+                });
+                session.on('confirmed', () => {
+                    log('Em chamada.');
+                });
+
+            } catch (err) {
+                console.error(err);
+                log('Erro ao iniciar chamada: ' + err.message);
+                setInCallUI(false);
+                session = null;
+            }
+        });
+
+        // Desligar
+        btnHangup.addEventListener('click', () => {
+            if (session) {
+                try {
+                    session.terminate();
+                } catch (_) {
+                }
+            }
+        });
+
+        // Tooltip inicial
+        log('Pronto. Configure ua.js e clique em Ligar.');
     })();
-  </script>
+    function attachAudioToSession(session) {
+        session.connection.addEventListener('addstream', (ev) => {
+            console.log('SIP: ' + new Date().toLocaleString('pt-BR') + ' remote audio stream adicionado');
+            const audio = new Audio();
+            audio.srcObject = ev.stream;
+            audio.play();
+        })
+    }
+</script>
 </body>
 </html>
